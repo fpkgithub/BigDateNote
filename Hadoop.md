@@ -447,7 +447,7 @@ Datanode通过DatanodeProtocol.register()方法向Namenode注册，Namenode接�
 
 
 
-##13 HDFS通信协议
+## 13 HDFS通信协议
 
 1）Hadoop RPC接口：六个接口
 
