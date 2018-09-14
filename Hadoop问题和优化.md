@@ -161,7 +161,7 @@ InputFormat会在map操作之前对数据进行两方面的预处理：
 
 12）关于状态的检测与更新不经过resourcemanager：**任务周期性的向MRAppMaster汇报状态及进度，**客户端每秒钟通过查询一次MRAppMaster获取状态更新信息。
 
-------
+---
 
 ## ---------------HFDS---------------
 
@@ -183,29 +183,29 @@ HDFS 采用Master/Slave的架构来存储数据，该架构主要由四个部分
 
 **NameNode** 
 
-> master，一个管理者，不实际存储数据 
+>master，一个管理者，不实际存储数据 
 >
-> 1、文件系统的命名空间：文件系统目录树+文件/目录信息+文件数据块索引 
+>1、文件系统的命名空间：文件系统目录树+文件/目录信息+文件数据块索引 
 >
-> 2、数据块之间的对应关系：启动时动态构建，以 **命名空间镜像文件** 和 **编辑日志文件** 形式存储在内存中
+>2、数据块之间的对应关系：启动时动态构建，以 **命名空间镜像文件** 和 **编辑日志文件** 形式存储在内存中
 >
-> 存在单点故障：使用备用（standby）名字节点 
+>存在单点故障：使用备用（standby）名字节点 
 >
-> 为了增强横向扩展解决内存的问题：联邦HDFS机制 
+>为了增强横向扩展解决内存的问题：联邦HDFS机制 
 
 **Datanode** 
 
-> 存储：Datanode以存储数据块(Block)的形式保存HDFS文件
+>存储：Datanode以存储数据块(Block)的形式保存HDFS文件
 >
-> 响应读写请求：同时Datanode还会响应HDFS客户端读、写数据块的请求
+>响应读写请求：同时Datanode还会响应HDFS客户端读、写数据块的请求
 >
-> 汇报信息：Datanode会周期性地向Namenode上报（心跳信息、 数据块汇报信息(BlockReport )、 缓存数据块汇报信息(CacheReport) 增量数据块块汇报信息。 ）
+>汇报信息：Datanode会周期性地向Namenode上报（心跳信息、 数据块汇报信息(BlockReport )、 缓存数据块汇报信息(CacheReport) 增量数据块块汇报信息。 ）
 >
-> 响应Namenode指令：Namenode会根据块汇报的内容,修改Namenode的命名空间(Namespace),同时向Datanode返回名字节点指令。Datanode会响应Namenode返回的名字节点指令,如创建、删除和复制数据块指令等。
+>响应Namenode指令：Namenode会根据块汇报的内容,修改Namenode的命名空间(Namespace),同时向Datanode返回名字节点指令。Datanode会响应Namenode返回的名字节点指令,如创建、删除和复制数据块指令等。
 
 **SecondaryNameNode** 
 
-> 辅助NameNode，分担其工作量 定期合并fsimage和edits，并推送给NameNode，紧急情况下，可辅助恢复NameNode 
+>辅助NameNode，分担其工作量 定期合并fsimage和edits，并推送给NameNode，紧急情况下，可辅助恢复NameNode 
 
 
 
@@ -451,25 +451,69 @@ Datanode通过DatanodeProtocol.register()方法向Namenode注册，Namenode接�
 
 1）Hadoop RPC接口：六个接口
 
-> 客户端与名字节点的通信接口：ClientProtocol 
+>客户端与名字节点的通信接口：ClientProtocol 
 >
-> 客户端与数据节点的通信接口：ClientDataNodeProtocol 
+>客户端与数据节点的通信接口：ClientDataNodeProtocol 
 >
-> 数据节点与名字节点通信接口：DatanodeProrocol(握手，注册，发送心跳，进行全量以及增量的数据块汇报)
+>数据节点与名字节点通信接口：DatanodeProrocol(握手，注册，发送心跳，进行全量以及增量的数据块汇报)
 >
->  数据节点与数据节点间的通信接口：InterDatanodeProtocol 
+> 数据节点与数据节点间的通信接口：InterDatanodeProtocol 
 >
-> 第二名字节点与名字节点间的接口：NamenodeProtocol（2.X引入了HA机制，检查点操作也不由SecondNamenode来执行了） 
+>第二名字节点与名字节点间的接口：NamenodeProtocol（2.X引入了HA机制，检查点操作也不由SecondNamenode来执行了） 
 >
-> 其他接口：安全接口、HA接口 
+>其他接口：安全接口、HA接口 
 
 
 
 2）流式接口
 
-> 基于TCP的Data TransferProtocol接口，来实现写入和读取数据（TCP利于大文件的批处理和高吞吐率） 
+>基于TCP的Data TransferProtocol接口，来实现写入和读取数据（TCP利于大文件的批处理和高吞吐率） 
 >
-> 基于Active Namenode和Standby Namenode间的HTTP接口 
+>基于Active Namenode和Standby Namenode间的HTTP接口 
+
+
+
+## 14 HDFS2.X 联邦机制
+
+**1）1.X的缺点导致引入了联邦机制** 
+
+HDFSl.x架构使用一个Namenode来管理文件系统的命名空间以及数据块信息，这虽然使得HDFS的实现非常简单，但是单一的Namenode会导致以下缺点。
+
+- 由于Namenode在内存中**保存整个文件系统的元数据**，所以Namenode内存的大小直接限制了文件系统的大小。
+- 由于HDFS文件的读写等流程都涉及与Namenode交互，所以**文件系统的吞吐量受限于单个Namenode的处理能力。**
+- Namenode作为文件系统的中心节点，**无法做到数据的有效隔离**。
+- Namenode是集群中的单一故障点，有可用性隐患
+- Namenode实现了数据块管理以及命名空间管理功能，造成这两个功能**高度耦合**，难以让其他服务单独使用数据块存储功能。
+
+
+
+**2）考虑到上述缺点，为了能够水平扩展Namenode，HDFS2.X引入了联邦机制，提供了Federation架构：**
+
+
+
+Federation架构的HDFS集群可以定义多个Namenode/Namespace，这些Namenode之间是相互独立的， '它们各自分工管理着自己的命名空间。 
+
+![img](https://upload-images.jianshu.io/upload_images/5959612-f36bd1603e29b8bf.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/627/format/webp) 
+
+**3）HDFS Federation两个新的概念：** 
+
+**块池：** BlockPool 
+
+一个块池由多个数据块组成，属于同一个命名空间下，这个块池中的数据块可以存储在集群中的所有数据节点上上，而每个Datanode都可以存储集群中所有块池的数据块。 每个块池是独立管理的，不会与其他的块池交互，所以一个Namenode出现故障时，并不会影响集群中的Datanode服务于其他的Namenode； 
+
+**命名空间卷：**NamespaceVolume。 
+
+一个Namenode管理的命名空间以及它对应的块池一起被称为命名空间卷，当一个Namenode/Namespace被删除后,它对应的块池也会从集群的数据节点上删除。需要特别注意的是，**当集群升级时，每个命名空间卷都会作为一个基本的单元进行升级** 
+
+
+
+**4）联邦机制的优势**
+
+支持Namenode/NameSpace的水平扩展，同时为用户和应用程序提供了命名空间卷级别的隔离性
+
+联邦机制实现简单，NameNode不需要怎么改变，只需更改Datanode的部分代码即可。 例如将块池作为数据块存储的一个新层次，以及更改Datanode内部的数据结构等。 
+
+可以分离Block storage层 ，解耦合命名空间管理和块存储管理；绕过Namenode/Namespace直接管理数据块，例如：Hbase可直接使用数据块； 可以在块存储上构建新文件系统（non-HDFS） 
 
 
 
@@ -479,31 +523,126 @@ Datanode通过DatanodeProtocol.register()方法向Namenode注册，Namenode接�
 
 1）队列调度：FIFO Scheduler (默认)
 
-> FIFO Scheduler把应用按提交的顺序排成一个队列，这是一个先进先出队列，在进行资源分配的时候，先给队列中最头上的应用进行分配资源，待最头上的应用需求满足后再给下一个分配，以此类推。
+>FIFO Scheduler把应用按提交的顺序排成一个队列，这是一个先进先出队列，在进行资源分配的时候，先给队列中最头上的应用进行分配资源，待最头上的应用需求满足后再给下一个分配，以此类推。
 >
-> 缺点：FIFO Scheduler它并不适用于共享集群。**大的应用**可能会占用所有集群资源，这就导致其它应用被阻塞。
+>缺点：FIFO Scheduler它并不适用于共享集群。**大的应用**可能会占用所有集群资源，这就导致其它应用被阻塞。
 
 2）容量调度：Capacity Scheduler 
 
-> Capacity调度器，有一个专门的队列用来运行小任务，但是为小任务专门设置一个队列**会预先占用一定的集群资源，**这就导致大任务的执行时间会落后于使用FIFO调度器时的时间。
+>Capacity调度器，有一个专门的队列用来运行小任务，但是为小任务专门设置一个队列**会预先占用一定的集群资源，**这就导致大任务的执行时间会落后于使用FIFO调度器时的时间。
 >
-> Capacity 调度器允许多个组织**共享整个集群，**每个组织可以获得集群的一部分计算能力。通过为每个组织分配专门的队列，然后再为每个队列分配一定的集群资源，这样整个集群就可以通过设置多个队列的方式给多个组织提供服务了。除此之外，队列内部又可以垂直划分，这样一个组织内部的多个成员就可以共享这个队列资源了，**在一个队列内部，资源的调度是采用的是先进先出(FIFO)策略。**
+>Capacity 调度器允许多个组织**共享整个集群，**每个组织可以获得集群的一部分计算能力。通过为每个组织分配专门的队列，然后再为每个队列分配一定的集群资源，这样整个集群就可以通过设置多个队列的方式给多个组织提供服务了。除此之外，队列内部又可以垂直划分，这样一个组织内部的多个成员就可以共享这个队列资源了，**在一个队列内部，资源的调度是采用的是先进先出(FIFO)策略。**
 >
-> 当队列已满，Capacity调度器不会强制释放Container，当一个队列资源不够用时，这个队列只能获得其它队列释放后的Container资源，这个称为“弹性队列”，也可以设置最大值，防止过多占用其他队列的资源。
+>当队列已满，Capacity调度器不会强制释放Container，当一个队列资源不够用时，这个队列只能获得其它队列释放后的Container资源，这个称为“弹性队列”，也可以设置最大值，防止过多占用其他队列的资源。
 
 
 
 3）公平调度：Fair Scheduler 
 
-> Fair调度器中，我们不需要预先占用一定的系统资源，Fair调度器会为所有运行的job动态的调整系统资源。
+>Fair调度器中，我们不需要预先占用一定的系统资源，Fair调度器会为所有运行的job动态的调整系统资源。
 >
-> 最终的效果就是Fair调度器即得到了高的资源利用率又能保证小任务及时完成。
+>最终的效果就是Fair调度器即得到了高的资源利用率又能保证小任务及时完成。
 
 
 
+## 2 Yarn的优势 
+
+在Hadoop1时：
+
+>1、JobTracker容易存在单点故障
+>
+>2、JobTracker负担重，既要负责资源管理，又要进行作业调度；当需处理太多任务时，会造成过多的资源消耗。
+>
+>3、当mapreduce job非常多的时候，会造成很大的内存开销，在 
+>TaskTracker端，**以mapreduce task的数目作为资源的表示过于简单**，没有考虑到cpu以及内存的占用情况，如果两个大内存消耗的task被调度到了一块，很容易出现OutOfMemory异常。
+>
+>4、在TaskTracker端，把资源强制划分为`map task slot`和`reduce task slot`，如果当系统中只有map task或者只有reduce task的时候，会造成资源的浪费。
+
+**解决单点故障和资源管理分配：**在Hadoop2使用Yarn来统一管理集群资源，Yarn把JobTracter分为ResourceManager和ApplactionMaster，ResouceManager专管整个集群的资源管理和调度，而ApplicationMaster则负责应用程序的任务调度和容错等 
+
+**扩展性增强：**YARN不再是一个单纯的计算框架，而是一个框架管理器，用户可以将各种各样的计算框架移植到YARN之上，由YARN进行统一管理和资源分配
+
+**资源管理单位：**对于资源的表示以内存和CPU为单位，比之前slot 更合理 
 
 
-## 2 分布式架构的CAP原则
+
+## 4 Yarn的架构
+
+YARN主要由**ResouceManager、NodeManager、ApplicationMaster**和**Container**等4个组件构成 
+
+**1）ResourceManager ：** 
+
+处理客户端的请求、启动和管理ApplicationMaster、监控NameManager（心跳机制）、资源的分配和管理
+
+**2）NodeManager：** 
+
+管理节点上的资源、处理来自ResourceManager的命令、处理来自ApplicationMaster的命令
+
+**3）ApplicationMaster：** 
+
+为任务申请资源并分配给内部的任务、对任务进行监控和容错
+
+**4）Container：** 
+
+对任务的运行环境进行抽象，封装CPU内存等资源
+
+
+
+## 5 MR的任务在Yarn上的运行过程
+
+![img](https://upload-images.jianshu.io/upload_images/5959612-7831d525b3c24293.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/598/format/webp) 
+
+1）客户端向resourcemanager**发送job请求**，客户端产生Runjar进程与resourcemanager通过rpc通信 
+
+2）resourcemanager向客户端**返回Job相关资源的提交路径**以以及**jobID** 
+
+3）客户端将Job相关的资源提交到相应的共享文件系统的路径下（eg.HDFS） 
+
+4）客户端向resourcemanager**提交job** 
+
+5）resourcemanager通过调度器在nodemanager**创建一个容器**，**并在容器中启用 MRAppMaster进程**（该进程由resourcemanager启动）。 
+
+6）该MRAppMaster进程**对作业进行初始化**，创建多个对象对作业进行跟踪。 
+
+7）MRAppMaster从共享文件系统中**获得计算到的输入分片**（只获取分片信息，不需要jar等相关资源），为每一个分片**创建一个map以及指定数量的reduce对象**。之后 MRAppMaster决定如何运行构成mapreduce作业的各个任务，如果作业很小，则与 MRAppMaster在同一个JVM上运行 
+
+8）若作业很大，则MRAppMaster会为所有map任务和reduce任务向resourcemanager**发起申请容器资源请求。**请求中包含了map任务的数据本地化信息以及输入分片等信息。 
+
+9）Resourcemanager为任务分配了容器之后，MRAppMaster就通过与NodeManager通信启动容器，**由MRAppMaster负责分配在那些nodemanager上运行map和reduce任务。** 
+
+10）运行map和reduce任务的nodemanager**从共享文件系统中获取job相关资源，包括 jar文件，配置文件**等。 
+
+11）运行map和reduce任条。 
+
+12）关于状态的检测与更新不经过resourcemanager：执行的任务周期性的向MRAppMaster汇报状态及进度，客户端每秒钟通过查询一次MRAppMaster获取状态更新信息。 
+
+>1.由于resourcemanager负责资源的分配，当NodeManager启动时，会向 ResourceManager注册，而注册信息中会包含该节点可分配的CPU和内存总量 
+>
+>2.YARN的资源分配过程是异步的，也就是说，资源调度器将资源分配给一个应用后，不会立刻push给对应的ApplicaitonMaster，而是暂时放到一个缓冲区中，等待 ApplicationMaster通过周期性的RPC函数主动来取。 
+
+## 6 Yarn的容错
+
+**RM：**HA方案避免单点故障 
+
+**AM：**AM向RM周期性发送心跳，出故障后RM会启动新的AM，受最大失败次数限制 
+
+**NM：**周期性RM发送心跳，如果一定时间内没有发送，RM 就认为该NM 挂掉了，或者NM上运行的Task失败次数太多，就会把上面所有任务调度到其它NM上 
+
+**Task：**Task也可能运行挂掉，比如内存超出了或者磁盘挂掉了，NM会汇报AM，AM会把该Task调度到其它节点上，但受到重试次数的限制 
+
+
+
+## 7 资源调度和资源隔离机制
+
+**资源调度**由ResourceManager完成；
+
+**资源隔离**由各个NodeManager实现。
+
+资源管理由ResourceManager和NodeManager共同完成，其中，ResourceManager中的调度器负责资源的分配，而NodeManager则负责资源的供给和隔离，ResourceManager将NodeManager上资源分配给任务后，NodeManager需按照要求为任务提供相应的资源，甚至保证这些资源应具有独占性，为任务运行提供基础的保证，这就是所谓的资源隔离。 
+
+
+
+## 8 分布式架构的CAP原则
 
 1）Consistency（一致性）：每次读操作都能保证返回的是最新数据；
 
